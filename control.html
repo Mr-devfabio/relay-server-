@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="pt-br">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RemoteScreen — Controle Remoto</title>
+<style>
+  :root {
+    --bg: #0d1117; --panel:#161b22; --border:#30363d;
+    --text:#e6edf3; --muted:#8b949e; --accent:#2f81f7; --green:#3fb950; --red:#f85149;
+  }
+  * { box-sizing:border-box; }
+  body {
+    background:var(--bg); color:var(--text); font-family:-apple-system,Segoe UI,Roboto,sans-serif;
+    margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center; padding:20px;
+  }
+  h1 { font-size:20px; font-weight:600; margin:0 0 20px; }
+  .panel {
+    background:var(--panel); border:1px solid var(--border); border-radius:10px;
+    padding:20px; width:100%; max-width:420px; margin-bottom:16px;
+  }
+  .row { display:flex; gap:10px; margin-bottom:10px; }
+  input {
+    flex:1; background:#0d1117; border:1px solid var(--border); color:var(--text);
+    padding:10px 12px; border-radius:6px; font-size:14px;
+  }
+  button {
+    background:var(--accent); color:#fff; border:none; padding:10px 16px;
+    border-radius:6px; cursor:pointer; font-size:14px; font-weight:500;
+  }
+  button:hover { opacity:0.9; }
+  button.secondary { background:#21262d; border:1px solid var(--border); }
+  button.danger { background:var(--red); }
+  #status { font-size:13px; color:var(--muted); display:flex; align-items:center; gap:6px; }
+  .dot { width:8px; height:8px; border-radius:50%; background:var(--red); }
+  .dot.on { background:var(--green); }
+
+  #screenWrap { position:relative; display:none; }
+  #screen { border:1px solid var(--border); border-radius:8px; max-width:100%; max-height:78vh; touch-action:none; cursor:crosshair; background:#000; }
+  #fps { position:absolute; top:8px; left:8px; background:rgba(0,0,0,0.6); color:#0f0; font-size:11px; padding:2px 6px; border-radius:4px; }
+
+  .toolbar { display:flex; gap:8px; margin-top:10px; flex-wrap:wrap; justify-content:center; }
+  .toolbar button { min-width:70px; }
+
+  .quality-row { display:flex; align-items:center; gap:10px; margin-top:12px; font-size:13px; color:var(--muted); }
+  input[type=range] { flex:1; }
+</style>
+</head>
+<body>
+
+<h1>🖥️ RemoteScreen — Controle Remoto</h1>
+
+<div class="panel" id="connectPanel">
+  <div class="row">
+    <input id="serverUrl" placeholder="wss://seu-servidor.exemplo.com" value="">
+  </div>
+  <div class="row">
+    <input id="deviceId" placeholder="ID do aparelho (ex: a1b2c3d4)">
+    <input id="pin" placeholder="PIN (6 dígitos)" maxlength="6">
+  </div>
+  <div class="row">
+    <button id="connectBtn" style="flex:1">Conectar</button>
+  </div>
+  <div id="status"><span class="dot" id="statusDot"></span><span id="statusText">desconectado</span></div>
+</div>
+
+<div id="screenWrap">
+  <canvas id="screen"></canvas>
+  <div id="fps">0 fps</div>
+</div>
+
+<div class="panel" id="controlsPanel" style="display:none; max-width:600px;">
+  <div class="toolbar">
+    <button class="secondary" id="btnBack">⬅ Voltar</button>
+    <button class="secondary" id="btnHome">⌂ Início</button>
+    <button class="secondary" id="btnRecents">▢ Recentes</button>
+    <button class="secondary" id="btnLock">🔒 Bloquear</button>
+    <button class="danger" id="disconnectBtn">Desconectar</button>
+  </div>
+  <div class="quality-row">
+    <span>Qualidade</span>
+    <input type="range" id="quality" min="10" max="100" value="40">
+    <span>FPS</span>
+    <input type="range" id="fps" min="1" max="24" value="10">
+  </div>
+  <div id="deviceInfo" style="margin-top:10px; font-size:12px; color:var(--muted);"></div>
+</div>
+
+<div class="panel" id="pastePanel" style="display:none; max-width:600px;">
+  <div style="font-size:13px; color:var(--muted); margin-bottom:8px;">
+    Cole ou digite um texto aqui e envie — ele vai direto pra área de
+    transferência do celular (e, se houver um campo de texto focado lá, é
+    inserido automaticamente nele).
+  </div>
+  <div class="row">
+    <input id="pasteText" placeholder="Digite ou cole o texto aqui...">
+    <button id="sendPasteBtn">Colar no celular</button>
+  </div>
+</div>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const canvas = $('screen');
+const ctx = canvas.getContext('2d');
+
+let ws = null;
+let frameCount = 0;
+let lastFpsTick = Date.now();
+
+function setStatus(connected, text) {
+  $('statusDot').classList.toggle('on', connected);
+  $('statusText').textContent = text;
+}
+
+$('connectBtn').onclick = () => {
+  const serverUrl = $('serverUrl').value.trim();
+  const deviceId = $('deviceId').value.trim();
+  const pin = $('pin').value.trim();
+  if (!serverUrl || !deviceId || !pin) {
+    alert('Preencha servidor, ID do aparelho e PIN.');
+    return;
+  }
+
+  if (ws) ws.close();
+  setStatus(false, 'conectando...');
+
+  ws = new WebSocket(serverUrl);
+  ws.binaryType = 'arraybuffer';
+
+  ws.onopen = () => {
+    ws.send(JSON.stringify({ role: 'controller', deviceId, pin }));
+  };
+
+  ws.onclose = () => {
+    setStatus(false, 'desconectado');
+    $('screenWrap').style.display = 'none';
+    $('controlsPanel').style.display = 'none';
+    $('pastePanel').style.display = 'none';
+  };
+
+  ws.onerror = () => setStatus(false, 'erro na conexão');
+
+  ws.onmessage = (event) => {
+    if (typeof event.data !== 'string') {
+      // frame de vídeo binário
+      drawFrame(event.data);
+      return;
+    }
+    handleControlMessage(JSON.parse(event.data));
+  };
+};
+
+$('disconnectBtn').onclick = () => { if (ws) ws.close(); };
+
+function handleControlMessage(msg) {
+  switch (msg.type) {
+    case 'connected':
+      setStatus(true, 'conectado — aguardando imagem');
+      $('screenWrap').style.display = 'block';
+      $('controlsPanel').style.display = 'block';
+      $('pastePanel').style.display = 'block';
+      break;
+    case 'error':
+      setStatus(false, 'erro: ' + msg.message);
+      break;
+    case 'device-offline':
+      setStatus(false, 'aparelho ficou offline');
+      break;
+    case 'device-info':
+      $('deviceInfo').textContent =
+        `${msg.model} • Android ${msg.androidVersion} (API ${msg.sdkInt}) • ` +
+        `${msg.width}x${msg.height} • Bateria: ${msg.battery}%` +
+        (msg.touchSupported ? '' : ' • ⚠ toque não suportado nesta versão');
+      break;
+  }
+}
+
+function drawFrame(arrayBuffer) {
+  const blob = new Blob([arrayBuffer], { type: 'image/jpeg' });
+  const url = URL.createObjectURL(blob);
+  const img = new Image();
+  img.onload = () => {
+    if (canvas.width !== img.width || canvas.height !== img.height) {
+      canvas.width = img.width;
+      canvas.height = img.height;
+    }
+    ctx.drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
+
+    frameCount++;
+    const now = Date.now();
+    if (now - lastFpsTick >= 1000) {
+      $('fps').textContent = frameCount + ' fps';
+      frameCount = 0;
+      lastFpsTick = now;
+    }
+  };
+  img.src = url;
+}
+
+// --- Entrada de toque/mouse ---
+function getRealCoords(clientX, clientY) {
+  const rect = canvas.getBoundingClientRect();
+  return {
+    x: (clientX - rect.left) * (canvas.width / rect.width),
+    y: (clientY - rect.top) * (canvas.height / rect.height)
+  };
+}
+
+function send(obj) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
+
+let dragStart = null;
+
+canvas.addEventListener('mousedown', (e) => dragStart = getRealCoords(e.clientX, e.clientY));
+canvas.addEventListener('mouseup', (e) => {
+  if (!dragStart) return;
+  const end = getRealCoords(e.clientX, e.clientY);
+  finishGesture(dragStart, end);
+  dragStart = null;
+});
+
+canvas.addEventListener('touchstart', (e) => {
+  const t = e.touches[0];
+  dragStart = getRealCoords(t.clientX, t.clientY);
+  e.preventDefault();
+}, { passive:false });
+
+canvas.addEventListener('touchend', (e) => {
+  if (!dragStart) return;
+  const t = e.changedTouches[0];
+  const end = getRealCoords(t.clientX, t.clientY);
+  finishGesture(dragStart, end);
+  dragStart = null;
+  e.preventDefault();
+}, { passive:false });
+
+function finishGesture(start, end) {
+  const dist = Math.hypot(end.x - start.x, end.y - start.y);
+  if (dist < 10) send({ type:'tap', x:end.x, y:end.y });
+  else send({ type:'swipe', x1:start.x, y1:start.y, x2:end.x, y2:end.y, duration:200 });
+}
+
+// --- Botões de navegação ---
+$('btnBack').onclick = () => send({ type:'key', key:'back' });
+$('btnHome').onclick = () => send({ type:'key', key:'home' });
+$('btnRecents').onclick = () => send({ type:'key', key:'recents' });
+$('btnLock').onclick = () => send({ type:'key', key:'lock' });
+
+// --- Qualidade / FPS ---
+$('quality').addEventListener('change', (e) => send({ type:'quality', value: parseInt(e.target.value) }));
+$('fps').addEventListener('change', (e) => send({ type:'fps', value: parseInt(e.target.value) }));
+
+// --- Colar texto no celular ---
+$('sendPasteBtn').onclick = () => {
+  const text = $('pasteText').value;
+  if (!text) return;
+  send({ type:'paste', text });
+  $('pasteText').value = '';
+};
+</script>
+</body>
+</html>

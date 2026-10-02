@@ -1,0 +1,15 @@
+{
+  "name": "remotescreen-relay",
+  "version": "1.0.0",
+  "description": "Servidor relay para o app RemoteScreen — conecta app Android e pagina web de controle fora da rede local.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
