@@ -64,6 +64,14 @@
   <div id="status"><span class="dot" id="statusDot"></span><span id="statusText">desconectado</span></div>
 </div>
 
+<div class="panel" id="devicesPanel">
+  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+    <strong style="font-size:14px;">Aparelhos online</strong>
+    <button class="secondary" id="refreshDevicesBtn">↻ Atualizar</button>
+  </div>
+  <div id="devicesList" style="font-size:13px; color:var(--muted);">Carregando...</div>
+</div>
+
 <div id="screenWrap">
   <canvas id="screen"></canvas>
   <div id="fps">0 fps</div>
@@ -121,10 +129,8 @@ function setStatus(connected, text) {
   $('statusText').textContent = text;
 }
 
-$('connectBtn').onclick = () => {
+function connectTo(deviceId, pin) {
   const serverUrl = $('serverUrl').value.trim();
-  const deviceId = $('deviceId').value.trim();
-  const pin = $('pin').value.trim();
   if (!serverUrl || !deviceId || !pin) {
     alert('Preencha servidor, ID do aparelho e PIN.');
     return;
@@ -157,9 +163,56 @@ $('connectBtn').onclick = () => {
     }
     handleControlMessage(JSON.parse(event.data));
   };
+}
+
+$('connectBtn').onclick = () => {
+  connectTo($('deviceId').value.trim(), $('pin').value.trim());
 };
 
 $('disconnectBtn').onclick = () => { if (ws) ws.close(); };
+
+// --- Lista de aparelhos online ---
+async function loadDevices() {
+  try {
+    const res = await fetch(location.origin + '/devices');
+    const data = await res.json();
+    renderDevices(data.devices || []);
+  } catch (e) {
+    $('devicesList').textContent = 'Não foi possível consultar os aparelhos.';
+  }
+}
+
+function renderDevices(list) {
+  const container = $('devicesList');
+  if (list.length === 0) {
+    container.textContent = 'Nenhum aparelho online no momento.';
+    return;
+  }
+  container.innerHTML = '';
+  list.forEach((d) => {
+    const row = document.createElement('div');
+    row.style.cssText = 'display:flex; align-items:center; justify-content:space-between; padding:8px 0; border-bottom:1px solid var(--border);';
+    row.innerHTML = `
+      <div>
+        <div style="color:var(--text); font-weight:500;">${d.deviceId}</div>
+        <div>PIN: ${d.pin}${d.beingControlled ? ' • já sendo controlado' : ''}</div>
+      </div>
+    `;
+    const btn = document.createElement('button');
+    btn.textContent = 'Conectar';
+    btn.onclick = () => {
+      $('deviceId').value = d.deviceId;
+      $('pin').value = d.pin;
+      connectTo(d.deviceId, d.pin);
+    };
+    row.appendChild(btn);
+    container.appendChild(row);
+  });
+}
+
+$('refreshDevicesBtn').onclick = loadDevices;
+loadDevices();
+setInterval(loadDevices, 8000); // atualiza sozinho a cada 8s
 
 function handleControlMessage(msg) {
   switch (msg.type) {
