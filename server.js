@@ -25,8 +25,26 @@ const PUBLIC_DIR = path.join(__dirname, 'public');
 
 const server = http.createServer((req, res) => {
   if (req.url === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
     res.end(JSON.stringify({ status: 'ok', devicesOnline: devices.size }));
+    return;
+  }
+
+  // Lista os aparelhos atualmente online, com ID e PIN, pra página de
+  // controle já mostrar prontos pra conectar (ver aviso de segurança no README).
+  if (req.url === '/devices') {
+    const list = [];
+    for (const [deviceId, entry] of devices.entries()) {
+      const online = entry.socket && entry.socket.readyState === WebSocket.OPEN;
+      if (!online) continue;
+      list.push({
+        deviceId,
+        pin: entry.pin,
+        beingControlled: !!(entry.controller && entry.controller.readyState === WebSocket.OPEN)
+      });
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    res.end(JSON.stringify({ devices: list }));
     return;
   }
 
@@ -37,8 +55,13 @@ const server = http.createServer((req, res) => {
     const filePath = path.join(PUBLIC_DIR, 'control.html');
     fs.readFile(filePath, (err, content) => {
       if (err) {
-        res.writeHead(500);
-        res.end('Não foi possível carregar a página de controle.');
+        console.error('Falha ao ler control.html em', filePath, err.message);
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end(
+          'Não foi possível carregar a página de controle.\n' +
+          'O servidor não encontrou o arquivo public/control.html.\n' +
+          'Verifique se essa pasta foi enviada junto no deploy.'
+        );
         return;
       }
       res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
@@ -47,7 +70,7 @@ const server = http.createServer((req, res) => {
     return;
   }
 
-  res.writeHead(404);
+  res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
   res.end('Não encontrado.');
 });
 
