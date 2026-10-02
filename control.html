@@ -103,6 +103,15 @@ const $ = (id) => document.getElementById(id);
 const canvas = $('screen');
 const ctx = canvas.getContext('2d');
 
+// Se esta página estiver sendo servida pelo próprio relay (Render, etc.),
+// já preenche o endereço do servidor sozinho, usando o mesmo domínio.
+(function autoFillServerUrl() {
+  if (location.protocol === 'http:' || location.protocol === 'https:') {
+    const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    $('serverUrl').value = wsProtocol + '//' + location.host;
+  }
+})();
+
 let ws = null;
 let frameCount = 0;
 let lastFpsTick = Date.now();

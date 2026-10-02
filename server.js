@@ -16,9 +16,12 @@
  */
 
 const http = require('http');
+const fs = require('fs');
+const path = require('path');
 const WebSocket = require('ws');
 
 const PORT = process.env.PORT || 8080;
+const PUBLIC_DIR = path.join(__dirname, 'public');
 
 const server = http.createServer((req, res) => {
   if (req.url === '/health') {
@@ -26,8 +29,26 @@ const server = http.createServer((req, res) => {
     res.end(JSON.stringify({ status: 'ok', devicesOnline: devices.size }));
     return;
   }
-  res.writeHead(200);
-  res.end('Relay server rodando.');
+
+  // Serve a própria página de controle (painel web) direto deste servidor,
+  // assim dá pra acessar o painel por um link, de qualquer aparelho,
+  // sem precisar abrir um arquivo .html local.
+  if (req.url === '/' || req.url === '/control.html') {
+    const filePath = path.join(PUBLIC_DIR, 'control.html');
+    fs.readFile(filePath, (err, content) => {
+      if (err) {
+        res.writeHead(500);
+        res.end('Não foi possível carregar a página de controle.');
+        return;
+      }
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(content);
+    });
+    return;
+  }
+
+  res.writeHead(404);
+  res.end('Não encontrado.');
 });
 
 const wss = new WebSocket.Server({ server });
