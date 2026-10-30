@@ -83,6 +83,7 @@
     <button class="secondary" id="btnHome">⌂ Início</button>
     <button class="secondary" id="btnRecents">▢ Recentes</button>
     <button class="secondary" id="btnLock">🔒 Bloquear</button>
+    <button class="danger" id="btnOverlay">🖥️ Máscara Negra</button>
     <button class="danger" id="disconnectBtn">Desconectar</button>
   </div>
   <div class="quality-row">
@@ -111,8 +112,6 @@ const $ = (id) => document.getElementById(id);
 const canvas = $('screen');
 const ctx = canvas.getContext('2d');
 
-// Se esta página estiver sendo servida pelo próprio relay (Render, etc.),
-// já preenche o endereço do servidor sozinho, usando o mesmo domínio.
 (function autoFillServerUrl() {
   if (location.protocol === 'http:' || location.protocol === 'https:') {
     const wsProtocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -123,10 +122,19 @@ const ctx = canvas.getContext('2d');
 let ws = null;
 let frameCount = 0;
 let lastFpsTick = Date.now();
+let overlayOn = false;
 
 function setStatus(connected, text) {
   $('statusDot').classList.toggle('on', connected);
   $('statusText').textContent = text;
+}
+
+function resetOverlayButton() {
+  overlayOn = false;
+  const b = $('btnOverlay');
+  if (!b) return;
+  b.textContent = '🖥️ Máscara Negra';
+  b.style.background = 'var(--red)';
 }
 
 function connectTo(deviceId, pin) {
@@ -151,13 +159,13 @@ function connectTo(deviceId, pin) {
     $('screenWrap').style.display = 'none';
     $('controlsPanel').style.display = 'none';
     $('pastePanel').style.display = 'none';
+    resetOverlayButton();
   };
 
   ws.onerror = () => setStatus(false, 'erro na conexão');
 
   ws.onmessage = (event) => {
     if (typeof event.data !== 'string') {
-      // frame de vídeo binário
       drawFrame(event.data);
       return;
     }
@@ -169,9 +177,11 @@ $('connectBtn').onclick = () => {
   connectTo($('deviceId').value.trim(), $('pin').value.trim());
 };
 
-$('disconnectBtn').onclick = () => { if (ws) ws.close(); };
+$('disconnectBtn').onclick = () => {
+  if (overlayOn) send({ type: 'overlay', enabled: false });
+  if (ws) ws.close();
+};
 
-// --- Lista de aparelhos online ---
 async function loadDevices() {
   try {
     const res = await fetch(location.origin + '/devices');
@@ -212,7 +222,7 @@ function renderDevices(list) {
 
 $('refreshDevicesBtn').onclick = loadDevices;
 loadDevices();
-setInterval(loadDevices, 8000); // atualiza sozinho a cada 8s
+setInterval(loadDevices, 8000);
 
 function handleControlMessage(msg) {
   switch (msg.type) {
@@ -227,6 +237,7 @@ function handleControlMessage(msg) {
       break;
     case 'device-offline':
       setStatus(false, 'aparelho ficou offline');
+      resetOverlayButton();
       break;
     case 'device-info':
       $('deviceInfo').textContent =
@@ -260,7 +271,6 @@ function drawFrame(arrayBuffer) {
   img.src = url;
 }
 
-// --- Entrada de toque/mouse ---
 function getRealCoords(clientX, clientY) {
   const rect = canvas.getBoundingClientRect();
   return {
@@ -302,17 +312,23 @@ function finishGesture(start, end) {
   else send({ type:'swipe', x1:start.x, y1:start.y, x2:end.x, y2:end.y, duration:200 });
 }
 
-// --- Botões de navegação ---
 $('btnBack').onclick = () => send({ type:'key', key:'back' });
 $('btnHome').onclick = () => send({ type:'key', key:'home' });
 $('btnRecents').onclick = () => send({ type:'key', key:'recents' });
 $('btnLock').onclick = () => send({ type:'key', key:'lock' });
 
-// --- Qualidade / FPS ---
+$('btnOverlay').onclick = () => {
+  overlayOn = !overlayOn;
+  send({ type: 'overlay', enabled: overlayOn });
+  $('btnOverlay').textContent = overlayOn
+    ? '🛑 Desativar Máscara'
+    : '🖥️ Máscara Negra';
+  $('btnOverlay').style.background = overlayOn ? 'var(--green)' : 'var(--red)';
+};
+
 $('quality').addEventListener('change', (e) => send({ type:'quality', value: parseInt(e.target.value) }));
 $('fps').addEventListener('change', (e) => send({ type:'fps', value: parseInt(e.target.value) }));
 
-// --- Colar texto no celular ---
 $('sendPasteBtn').onclick = () => {
   const text = $('pasteText').value;
   if (!text) return;
