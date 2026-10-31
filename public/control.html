@@ -90,7 +90,7 @@
     <span>Qualidade</span>
     <input type="range" id="quality" min="10" max="100" value="40">
     <span>FPS</span>
-    <input type="range" id="fps" min="1" max="24" value="10">
+    <input type="range" id="fpsSlider" min="1" max="24" value="10">
   </div>
   <div id="deviceInfo" style="margin-top:10px; font-size:12px; color:var(--muted);"></div>
 </div>
@@ -281,36 +281,65 @@ function getRealCoords(clientX, clientY) {
 
 function send(obj) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
 
+// ================== GESTOS (tap / swipe / LONG PRESS) ==================
 let dragStart = null;
+let longPressTimer = null;
+const LONG_PRESS_MS = 600;
+const LONG_PRESS_DURATION = 800;
 
-canvas.addEventListener('mousedown', (e) => dragStart = getRealCoords(e.clientX, e.clientY));
-canvas.addEventListener('mouseup', (e) => {
+function startGesture(clientX, clientY) {
+  dragStart = getRealCoords(clientX, clientY);
+  const startCopy = { ...dragStart };
+  if (longPressTimer) clearTimeout(longPressTimer);
+  longPressTimer = setTimeout(() => {
+    // Long press detectado: envia e cancela o tap/swipe
+    if (dragStart && startCopy) {
+      send({ type: 'longpress', x: startCopy.x, y: startCopy.y, duration: LONG_PRESS_DURATION });
+    }
+    dragStart = null;
+    longPressTimer = null;
+  }, LONG_PRESS_MS);
+}
+
+function endGesture(clientX, clientY) {
+  if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
   if (!dragStart) return;
-  const end = getRealCoords(e.clientX, e.clientY);
+  const end = getRealCoords(clientX, clientY);
   finishGesture(dragStart, end);
   dragStart = null;
-});
+}
 
+function cancelGesture() {
+  if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+  dragStart = null;
+}
+
+// Mouse
+canvas.addEventListener('mousedown', (e) => startGesture(e.clientX, e.clientY));
+canvas.addEventListener('mouseup', (e) => endGesture(e.clientX, e.clientY));
+canvas.addEventListener('mouseleave', () => cancelGesture());
+
+// Touch
 canvas.addEventListener('touchstart', (e) => {
   const t = e.touches[0];
-  dragStart = getRealCoords(t.clientX, t.clientY);
+  startGesture(t.clientX, t.clientY);
   e.preventDefault();
 }, { passive:false });
 
 canvas.addEventListener('touchend', (e) => {
-  if (!dragStart) return;
   const t = e.changedTouches[0];
-  const end = getRealCoords(t.clientX, t.clientY);
-  finishGesture(dragStart, end);
-  dragStart = null;
+  endGesture(t.clientX, t.clientY);
   e.preventDefault();
 }, { passive:false });
+
+canvas.addEventListener('touchcancel', () => cancelGesture(), { passive:true });
 
 function finishGesture(start, end) {
   const dist = Math.hypot(end.x - start.x, end.y - start.y);
   if (dist < 10) send({ type:'tap', x:end.x, y:end.y });
   else send({ type:'swipe', x1:start.x, y1:start.y, x2:end.x, y2:end.y, duration:200 });
 }
+// =======================================================================
 
 $('btnBack').onclick = () => send({ type:'key', key:'back' });
 $('btnHome').onclick = () => send({ type:'key', key:'home' });
@@ -327,7 +356,7 @@ $('btnOverlay').onclick = () => {
 };
 
 $('quality').addEventListener('change', (e) => send({ type:'quality', value: parseInt(e.target.value) }));
-$('fps').addEventListener('change', (e) => send({ type:'fps', value: parseInt(e.target.value) }));
+$('fpsSlider').addEventListener('change', (e) => send({ type:'fps', value: parseInt(e.target.value) }));
 
 $('sendPasteBtn').onclick = () => {
   const text = $('pasteText').value;
