@@ -44,6 +44,7 @@
 
   .quality-row { display:flex; align-items:center; gap:10px; margin-top:12px; font-size:13px; color:var(--muted); }
   input[type=range] { flex:1; }
+  input[type=radio] { accent-color: var(--accent); }
 </style>
 </head>
 <body>
@@ -107,6 +108,30 @@
   </div>
 </div>
 
+<div class="panel" id="modePanel" style="display:none; max-width:600px;">
+  <div style="display:flex; align-items:center; gap:10px; margin-bottom:10px; font-size:13px; flex-wrap:wrap;">
+    <span style="color:var(--muted);">Modo de captura:</span>
+    <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
+      <input type="radio" name="captureMode" value="stream" checked> Stream (tempo real)
+    </label>
+    <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
+      <input type="radio" name="captureMode" value="screenshot"> Screenshot (silencioso)
+    </label>
+  </div>
+
+  <div id="screenshotControls" style="display:none;">
+    <div class="row">
+      <button id="btnCaptureNow" style="flex:1;">📸 Capturar Agora</button>
+      <button class="secondary" id="btnAutoToggle">▶ Auto: OFF</button>
+    </div>
+    <div class="quality-row">
+      <span>Intervalo (s)</span>
+      <input type="range" id="shotInterval" min="1" max="30" value="10">
+      <span id="shotIntervalVal">10s</span>
+    </div>
+  </div>
+</div>
+
 <script>
 const $ = (id) => document.getElementById(id);
 const canvas = $('screen');
@@ -123,6 +148,11 @@ let ws = null;
 let frameCount = 0;
 let lastFpsTick = Date.now();
 let overlayOn = false;
+
+let captureMode = 'stream';        // 'stream' | 'screenshot'
+let autoShotTimer = null;
+let shotIntervalMs = 10000;
+let pendingManualShot = false;
 
 function setStatus(connected, text) {
   $('statusDot').classList.toggle('on', connected);
@@ -159,6 +189,8 @@ function connectTo(deviceId, pin) {
     $('screenWrap').style.display = 'none';
     $('controlsPanel').style.display = 'none';
     $('pastePanel').style.display = 'none';
+    $('modePanel').style.display = 'none';
+    stopAutoShots();
     resetOverlayButton();
   };
 
@@ -231,6 +263,8 @@ function handleControlMessage(msg) {
       $('screenWrap').style.display = 'block';
       $('controlsPanel').style.display = 'block';
       $('pastePanel').style.display = 'block';
+      $('modePanel').style.display = 'block';
+      send({ type: 'mode', mode: captureMode });
       break;
     case 'error':
       setStatus(false, 'erro: ' + msg.message);
@@ -281,65 +315,36 @@ function getRealCoords(clientX, clientY) {
 
 function send(obj) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(obj)); }
 
-// ================== GESTOS (tap / swipe / LONG PRESS) ==================
 let dragStart = null;
-let longPressTimer = null;
-const LONG_PRESS_MS = 600;
-const LONG_PRESS_DURATION = 800;
 
-function startGesture(clientX, clientY) {
-  dragStart = getRealCoords(clientX, clientY);
-  const startCopy = { ...dragStart };
-  if (longPressTimer) clearTimeout(longPressTimer);
-  longPressTimer = setTimeout(() => {
-    // Long press detectado: envia e cancela o tap/swipe
-    if (dragStart && startCopy) {
-      send({ type: 'longpress', x: startCopy.x, y: startCopy.y, duration: LONG_PRESS_DURATION });
-    }
-    dragStart = null;
-    longPressTimer = null;
-  }, LONG_PRESS_MS);
-}
-
-function endGesture(clientX, clientY) {
-  if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
+canvas.addEventListener('mousedown', (e) => dragStart = getRealCoords(e.clientX, e.clientY));
+canvas.addEventListener('mouseup', (e) => {
   if (!dragStart) return;
-  const end = getRealCoords(clientX, clientY);
+  const end = getRealCoords(e.clientX, e.clientY);
   finishGesture(dragStart, end);
   dragStart = null;
-}
+});
 
-function cancelGesture() {
-  if (longPressTimer) { clearTimeout(longPressTimer); longPressTimer = null; }
-  dragStart = null;
-}
-
-// Mouse
-canvas.addEventListener('mousedown', (e) => startGesture(e.clientX, e.clientY));
-canvas.addEventListener('mouseup', (e) => endGesture(e.clientX, e.clientY));
-canvas.addEventListener('mouseleave', () => cancelGesture());
-
-// Touch
 canvas.addEventListener('touchstart', (e) => {
   const t = e.touches[0];
-  startGesture(t.clientX, t.clientY);
+  dragStart = getRealCoords(t.clientX, t.clientY);
   e.preventDefault();
 }, { passive:false });
 
 canvas.addEventListener('touchend', (e) => {
+  if (!dragStart) return;
   const t = e.changedTouches[0];
-  endGesture(t.clientX, t.clientY);
+  const end = getRealCoords(t.clientX, t.clientY);
+  finishGesture(dragStart, end);
+  dragStart = null;
   e.preventDefault();
 }, { passive:false });
-
-canvas.addEventListener('touchcancel', () => cancelGesture(), { passive:true });
 
 function finishGesture(start, end) {
   const dist = Math.hypot(end.x - start.x, end.y - start.y);
   if (dist < 10) send({ type:'tap', x:end.x, y:end.y });
   else send({ type:'swipe', x1:start.x, y1:start.y, x2:end.x, y2:end.y, duration:200 });
 }
-// =======================================================================
 
 $('btnBack').onclick = () => send({ type:'key', key:'back' });
 $('btnHome').onclick = () => send({ type:'key', key:'home' });
@@ -364,6 +369,53 @@ $('sendPasteBtn').onclick = () => {
   send({ type:'paste', text });
   $('pasteText').value = '';
 };
+
+// ================= MODO SCREENSHOT =================
+document.querySelectorAll('input[name="captureMode"]').forEach((r) => {
+  r.addEventListener('change', (e) => {
+    captureMode = e.target.value;
+    $('screenshotControls').style.display = captureMode === 'screenshot' ? 'block' : 'none';
+    stopAutoShots();
+    send({ type: 'mode', mode: captureMode });
+  });
+});
+
+$('shotInterval').addEventListener('input', (e) => {
+  shotIntervalMs = parseInt(e.target.value) * 1000;
+  $('shotIntervalVal').textContent = e.target.value + 's';
+  if (autoShotTimer) { startAutoShots(); }
+});
+
+$('btnCaptureNow').onclick = () => {
+  pendingManualShot = true;
+  send({ type: 'capture-now' });
+};
+
+$('btnAutoToggle').onclick = () => {
+  if (autoShotTimer) {
+    stopAutoShots();
+  } else {
+    startAutoShots();
+  }
+};
+
+function startAutoShots() {
+  stopAutoShots();
+  $('btnAutoToggle').textContent = '⏸ Auto: ON';
+  $('btnAutoToggle').style.background = 'var(--green)';
+  autoShotTimer = setInterval(() => send({ type: 'capture-now' }), shotIntervalMs);
+}
+
+function stopAutoShots() {
+  if (autoShotTimer) clearInterval(autoShotTimer);
+  autoShotTimer = null;
+  const b = $('btnAutoToggle');
+  if (b) {
+    b.textContent = '▶ Auto: OFF';
+    b.style.background = 'var(--accent)';
+  }
+}
+// ===================================================
 </script>
 </body>
 </html>
