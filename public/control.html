@@ -119,6 +119,10 @@
     </label>
   </div>
 
+  <div class="row" style="margin-top:6px;">
+    <button class="secondary" id="btnPauseStream" style="flex:1;">⏸ Pausar transmissão</button>
+  </div>
+
   <div id="screenshotControls" style="display:none;">
     <div class="row">
       <button id="btnCaptureNow" style="flex:1;">📸 Capturar Agora</button>
@@ -153,6 +157,7 @@ let captureMode = 'stream';        // 'stream' | 'screenshot'
 let autoShotTimer = null;
 let shotIntervalMs = 10000;
 let pendingManualShot = false;
+let streamPaused = false;
 
 function setStatus(connected, text) {
   $('statusDot').classList.toggle('on', connected);
@@ -165,6 +170,14 @@ function resetOverlayButton() {
   if (!b) return;
   b.textContent = '🖥️ Máscara Negra';
   b.style.background = 'var(--red)';
+}
+
+function resetPauseButton() {
+  streamPaused = false;
+  const b = $('btnPauseStream');
+  if (!b) return;
+  b.textContent = '⏸ Pausar transmissão';
+  b.style.background = '#21262d';
 }
 
 function connectTo(deviceId, pin) {
@@ -192,6 +205,7 @@ function connectTo(deviceId, pin) {
     $('modePanel').style.display = 'none';
     stopAutoShots();
     resetOverlayButton();
+    resetPauseButton();
   };
 
   ws.onerror = () => setStatus(false, 'erro na conexão');
@@ -265,6 +279,7 @@ function handleControlMessage(msg) {
       $('pastePanel').style.display = 'block';
       $('modePanel').style.display = 'block';
       send({ type: 'mode', mode: captureMode });
+      send({ type: 'pause', paused: streamPaused });
       break;
     case 'error':
       setStatus(false, 'erro: ' + msg.message);
@@ -272,6 +287,7 @@ function handleControlMessage(msg) {
     case 'device-offline':
       setStatus(false, 'aparelho ficou offline');
       resetOverlayButton();
+      resetPauseButton();
       break;
     case 'device-info':
       $('deviceInfo').textContent =
@@ -415,6 +431,20 @@ function stopAutoShots() {
     b.style.background = 'var(--accent)';
   }
 }
+
+// ================= PAUSAR STREAM =================
+$('btnPauseStream').onclick = () => {
+  streamPaused = !streamPaused;
+  send({ type: 'pause', paused: streamPaused });
+  const b = $('btnPauseStream');
+  if (streamPaused) {
+    b.textContent = '▶ Retomar transmissão';
+    b.style.background = 'var(--green)';
+  } else {
+    b.textContent = '⏸ Pausar transmissão';
+    b.style.background = '#21262d';
+  }
+};
 // ===================================================
 </script>
 </body>
