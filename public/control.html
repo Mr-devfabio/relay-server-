@@ -56,7 +56,10 @@
     <input id="serverUrl" placeholder="wss://seu-servidor.exemplo.com" value="">
   </div>
   <div class="row">
-    <input id="deviceId" placeholder="ID do aparelho (ex: a1b2c3d4)">
+    <input id="identifier" placeholder="ID, modelo, telefone ou apelido" list="identifierHints">
+    <datalist id="identifierHints"></datalist>
+  </div>
+  <div class="row" id="pinRow" style="display:none;">
     <input id="pin" placeholder="PIN (6 dígitos)" maxlength="6">
   </div>
   <div class="row">
@@ -85,6 +88,7 @@
     <button class="secondary" id="btnRecents">▢ Recentes</button>
     <button class="secondary" id="btnLock">🔒 Bloquear</button>
     <button class="danger" id="btnOverlay">🖥️ Máscara Negra</button>
+    <button class="secondary" id="btnTouchBlock">🔒 Bloquear Toques</button>
     <button class="danger" id="disconnectBtn">Desconectar</button>
   </div>
   <div class="quality-row">
@@ -119,10 +123,6 @@
     </label>
   </div>
 
-  <div class="row" style="margin-top:6px;">
-    <button class="secondary" id="btnPauseStream" style="flex:1;">⏸ Pausar transmissão</button>
-  </div>
-
   <div id="screenshotControls" style="display:none;">
     <div class="row">
       <button id="btnCaptureNow" style="flex:1;">📸 Capturar Agora</button>
@@ -152,12 +152,12 @@ let ws = null;
 let frameCount = 0;
 let lastFpsTick = Date.now();
 let overlayOn = false;
+let touchBlockOn = false;
 
-let captureMode = 'stream';        // 'stream' | 'screenshot'
+let captureMode = 'stream';
 let autoShotTimer = null;
 let shotIntervalMs = 10000;
 let pendingManualShot = false;
-let streamPaused = false;
 
 function setStatus(connected, text) {
   $('statusDot').classList.toggle('on', connected);
@@ -172,18 +172,18 @@ function resetOverlayButton() {
   b.style.background = 'var(--red)';
 }
 
-function resetPauseButton() {
-  streamPaused = false;
-  const b = $('btnPauseStream');
+function resetTouchBlockButton() {
+  touchBlockOn = false;
+  const b = $('btnTouchBlock');
   if (!b) return;
-  b.textContent = '⏸ Pausar transmissão';
-  b.style.background = '#21262d';
+  b.textContent = '🔒 Bloquear Toques';
+  b.style.background = 'var(--accent)';
 }
 
 function connectTo(deviceId, pin) {
   const serverUrl = $('serverUrl').value.trim();
   if (!serverUrl || !deviceId || !pin) {
-    alert('Preencha servidor, ID do aparelho e PIN.');
+    alert('Preencha servidor, identificador e PIN.');
     return;
   }
 
@@ -205,7 +205,7 @@ function connectTo(deviceId, pin) {
     $('modePanel').style.display = 'none';
     stopAutoShots();
     resetOverlayButton();
-    resetPauseButton();
+    resetTouchBlockButton();
   };
 
   ws.onerror = () => setStatus(false, 'erro na conexão');
@@ -219,12 +219,62 @@ function connectTo(deviceId, pin) {
   };
 }
 
-$('connectBtn').onclick = () => {
-  connectTo($('deviceId').value.trim(), $('pin').value.trim());
+async function resolveIdentifier(idOrAlias) {
+  try {
+    const res = await fetch(location.origin + '/devices');
+    const data = await res.json();
+    const list = data.devices || [];
+    const q = idOrAlias.toLowerCase();
+
+    const byId = list.filter(d => d.deviceId && d.deviceId.toLowerCase() === q);
+    if (byId.length === 1) return byId[0];
+
+    const digits = q.replace(/[^0-9]/g, '');
+    const matches = list.filter(d => {
+      const phone = (d.phone || '').replace(/[^0-9]/g, '');
+      const alias = (d.alias || '').toLowerCase();
+      const model = (d.model || '').toLowerCase();
+      return (digits && phone && phone === digits)
+          || (alias && alias === q)
+          || (model && model === q);
+    });
+    if (matches.length === 1) return matches[0];
+    if (matches.length > 1) return { ambiguous: true, matches };
+    return null;
+  } catch (e) {
+    return null;
+  }
+}
+
+$('connectBtn').onclick = async () => {
+  const raw = $('identifier').value.trim();
+  if (!raw) { alert('Informe o ID, modelo, telefone ou apelido.'); return; }
+
+  const typedPin = $('pin').value.trim();
+  const resolved = await resolveIdentifier(raw);
+
+  if (!resolved) {
+    if (!typedPin) { $('pinRow').style.display = 'flex'; alert('Digite o PIN.'); return; }
+    connectTo(raw, typedPin);
+    return;
+  }
+  if (resolved.ambiguous) {
+    const opts = resolved.matches.map(d =>
+      `${d.deviceId} (${d.model || '?'}${d.phone ? ' • ' + d.phone : ''}${d.alias ? ' • ' + d.alias : ''})`
+    ).join('\n');
+    const chosen = prompt('Vários aparelhos correspondem. Copie o deviceId:\n\n' + opts);
+    if (!chosen) return;
+    $('identifier').value = chosen.trim();
+    $('pinRow').style.display = 'flex';
+    return;
+  }
+  if (!typedPin) { $('pinRow').style.display = 'flex'; alert('Digite o PIN de ' + resolved.deviceId); return; }
+  connectTo(resolved.deviceId, typedPin);
 };
 
 $('disconnectBtn').onclick = () => {
   if (overlayOn) send({ type: 'overlay', enabled: false });
+  if (touchBlockOn) send({ type: 'touch-block', enabled: false });
   if (ws) ws.close();
 };
 
@@ -240,6 +290,18 @@ async function loadDevices() {
 
 function renderDevices(list) {
   const container = $('devicesList');
+  const dl = $('identifierHints');
+  if (dl) {
+    dl.innerHTML = '';
+    list.forEach(d => {
+      [d.deviceId, d.model, d.phone, d.alias].filter(Boolean).forEach(v => {
+        const opt = document.createElement('option');
+        opt.value = v;
+        dl.appendChild(opt);
+      });
+    });
+  }
+
   if (list.length === 0) {
     container.textContent = 'Nenhum aparelho online no momento.';
     return;
@@ -251,13 +313,14 @@ function renderDevices(list) {
     row.innerHTML = `
       <div>
         <div style="color:var(--text); font-weight:500;">${d.deviceId}</div>
+        <div>${d.model || ''}${d.phone ? ' • ' + d.phone : ''}${d.alias ? ' • ' + d.alias : ''}</div>
         <div>PIN: ${d.pin}${d.beingControlled ? ' • já sendo controlado' : ''}</div>
       </div>
     `;
     const btn = document.createElement('button');
     btn.textContent = 'Conectar';
     btn.onclick = () => {
-      $('deviceId').value = d.deviceId;
+      $('identifier').value = d.deviceId;
       $('pin').value = d.pin;
       connectTo(d.deviceId, d.pin);
     };
@@ -279,7 +342,6 @@ function handleControlMessage(msg) {
       $('pastePanel').style.display = 'block';
       $('modePanel').style.display = 'block';
       send({ type: 'mode', mode: captureMode });
-      send({ type: 'pause', paused: streamPaused });
       break;
     case 'error':
       setStatus(false, 'erro: ' + msg.message);
@@ -287,12 +349,14 @@ function handleControlMessage(msg) {
     case 'device-offline':
       setStatus(false, 'aparelho ficou offline');
       resetOverlayButton();
-      resetPauseButton();
+      resetTouchBlockButton();
       break;
     case 'device-info':
       $('deviceInfo').textContent =
         `${msg.model} • Android ${msg.androidVersion} (API ${msg.sdkInt}) • ` +
         `${msg.width}x${msg.height} • Bateria: ${msg.battery}%` +
+        (msg.phone ? ` • ${msg.phone}` : '') +
+        (msg.alias ? ` • ${msg.alias}` : '') +
         (msg.touchSupported ? '' : ' • ⚠ toque não suportado nesta versão');
       break;
   }
@@ -376,6 +440,15 @@ $('btnOverlay').onclick = () => {
   $('btnOverlay').style.background = overlayOn ? 'var(--green)' : 'var(--red)';
 };
 
+$('btnTouchBlock').onclick = () => {
+  touchBlockOn = !touchBlockOn;
+  send({ type: 'touch-block', enabled: touchBlockOn });
+  $('btnTouchBlock').textContent = touchBlockOn
+    ? '🔓 Desbloquear Toques'
+    : '🔒 Bloquear Toques';
+  $('btnTouchBlock').style.background = touchBlockOn ? 'var(--green)' : 'var(--accent)';
+};
+
 $('quality').addEventListener('change', (e) => send({ type:'quality', value: parseInt(e.target.value) }));
 $('fpsSlider').addEventListener('change', (e) => send({ type:'fps', value: parseInt(e.target.value) }));
 
@@ -386,7 +459,6 @@ $('sendPasteBtn').onclick = () => {
   $('pasteText').value = '';
 };
 
-// ================= MODO SCREENSHOT =================
 document.querySelectorAll('input[name="captureMode"]').forEach((r) => {
   r.addEventListener('change', (e) => {
     captureMode = e.target.value;
@@ -408,11 +480,8 @@ $('btnCaptureNow').onclick = () => {
 };
 
 $('btnAutoToggle').onclick = () => {
-  if (autoShotTimer) {
-    stopAutoShots();
-  } else {
-    startAutoShots();
-  }
+  if (autoShotTimer) stopAutoShots();
+  else startAutoShots();
 };
 
 function startAutoShots() {
@@ -431,21 +500,6 @@ function stopAutoShots() {
     b.style.background = 'var(--accent)';
   }
 }
-
-// ================= PAUSAR STREAM =================
-$('btnPauseStream').onclick = () => {
-  streamPaused = !streamPaused;
-  send({ type: 'pause', paused: streamPaused });
-  const b = $('btnPauseStream');
-  if (streamPaused) {
-    b.textContent = '▶ Retomar transmissão';
-    b.style.background = 'var(--green)';
-  } else {
-    b.textContent = '⏸ Pausar transmissão';
-    b.style.background = '#21262d';
-  }
-};
-// ===================================================
 </script>
 </body>
 </html>
